@@ -1,37 +1,115 @@
-const fs = require("node:fs");
-const express = require("express");
-const expressWs = require("express-ws");
-const { spawn } = require("node:child_process");
-const WebSocket = require("ws");
+import express from "express";
+import expressWs from "express-ws";
+import { spawn } from "node:child_process";
+import WebSocket from "ws";
 
-const {
+import {
   createConnection,
   TextDocuments,
   ProposedFeatures,
   TextDocumentSyncKind,
-} = require("vscode-languageserver/node");
+} from "vscode-languageserver/node.js";
 
-const {
-  getLanguageService: htmlLanguageServer,
-} = require("vscode-html-languageservice");
+import { getLanguageService as htmlLanguageServer } from "vscode-html-languageservice";
 
-const {
-  AbstractMessageReader,
-  AbstractMessageWriter,
+// import {
+//   AbstractMessageReader,
+//   AbstractMessageWriter,
+//   IPCMessageReader,
+//   IPCMessageWriter,
+// } from "vscode-jsonrpc/node.js";
 
-  IPCMessageReader,
-  IPCMessageWriter,
-} = require("vscode-jsonrpc/node");
+import { TextDocument } from "vscode-languageserver-textdocument";
+import {
+  WebSocketMessageReader,
+  WebSocketMessageWriter,
+} from "vscode-ws-jsonrpc";
 
-const { TextDocument } = require("vscode-languageserver-textdocument");
 
-let WebsocketMessageReader, WebsocketMessageWriter;
-(async function() {
-    let ws = await import("vscode-ws-jsonrpc");
-    WebsocketMessageReader = ws.WebSocketMessageReader;
-    WebsocketMessageWriter = ws.WebSocketMessageWriter;
-})();
+class WebSocketProxy extends EventTarget {
+  onopen;
+  onclose;
+  onerror;
+  onmessage;
 
+  constructor() {
+    super();
+    this.connection = null;
+    this.sendQueue = new Array();
+  }
+
+  get readyState() {
+    if (this.connection) {
+      return this.connection.readyState;
+    }
+    return WebSocket.CLOSED;
+  }
+
+  initialize(connection) {
+    if (this.connection) {
+      this.connection.onclose = null;
+      this.connection.close();
+    }
+
+    this.connection = connection;
+    connection.onopen = (event) => {
+      this.dispatchEvent(new Event("open"));
+      this.onopen?.(event);
+
+      if (this.sendQueue.length) {
+        let newQueue = [...this.sendQueue];
+        this.sendQueue = [];
+        newQueue.map((data) => this.send(data));
+      }
+    };
+
+    connection.onmessage = (event) => {
+      this.dispatchEvent(
+        new MessageEvent("message", {
+          data: event.data,
+        })
+      );
+      this.onmessage?.(event);
+    };
+
+    connection.onclose = (event) => {
+      this.dispatchEvent(
+        new Event("close", {
+          reason: event.reason,
+          code: event.code,
+          wasClean: event.wasClean,
+        })
+      );
+      this.onclose?.(event);
+    };
+
+    connection.onerror = (error) => {
+      this.dispatchEvent(new Event("error"));
+      this.onerror?.(error);
+    };
+  }
+
+  send(data) {
+    // console.log("Sending:", data);
+    if (this.connection) {
+      if (this.connection.readyState === WebSocket.OPEN) {
+        this.connection.send(data);
+      } else {
+        this.sendQueue.push(data);
+        console.warn("WebSocket not open. Unable to send data.");
+      }
+    } else {
+      this.sendQueue.push(data);
+      this.connect();
+    }
+  }
+
+  close() {
+    if (this.connection) {
+      this.connection.close();
+    }
+  }
+}
 
 function sockWrapper(socket) {
   return {
@@ -47,6 +125,41 @@ function sockWrapper(socket) {
       return socket.addEventListener("close", callback);
     },
   };
+}
+
+function proxyServer(websocket, command, args) {
+  // Start the language server subprocess
+  const languageServer = spawn(command, args || [], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  // Create separate streams for stdin and stdout
+  const stdinStream = languageServer.stdin;
+  const stdoutStream = languageServer.stdout;
+
+  // Pipe data from the WebSocket to the language server stdin
+  websocket.on("message", (data) => {
+    stdinStream.write(data);
+  });
+
+  // Pipe data from the language server stdout to the WebSocket
+  stdoutStream.on("data", (data) => {
+    websocket.send(data);
+  });
+
+  // Handle the closure of WebSocket
+  websocket.on("close", () => {
+    languageServer.kill();
+  });
+
+  // Handle the closure of language server
+  languageServer.on("close", () => {
+    websocket.close();
+  });
+
+  languageServer.on("error", () => {
+    websocket.close();
+  });
 }
 
 const app = express();
@@ -72,8 +185,8 @@ const serverModes = {
     const service = htmlLanguageServer();
 
     const connection = createConnection(
-      new WebsocketMessageReader(sockWrapper(socket)),
-      new WebsocketMessageWriter(socket),
+      new WebSocketMessageReader(sockWrapper(socket)),
+      new WebSocketMessageWriter(socket),
       ProposedFeatures.all
     );
 
@@ -204,8 +317,8 @@ const serverModes = {
     } = require("@vue/language-server/out/languageServerPlugin");
 
     const connection = createConnection(
-      new WebsocketMessageReader(sockWrapper(socket)),
-      new WebsocketMessageWriter(socket),
+      new WebSocketMessageReader(sockWrapper(socket)),
+      new WebSocketMessageWriter(socket),
       ProposedFeatures.all
     );
     let vuePlugin = createServerPlugin(connection);
@@ -218,8 +331,8 @@ const serverModes = {
     );
 
     const connection = createConnection(
-      new WebsocketMessageReader(sockWrapper(socket)),
-      new WebsocketMessageWriter(socket),
+      new WebSocketMessageReader(sockWrapper(socket)),
+      new WebSocketMessageWriter(socket),
       ProposedFeatures.all
     );
 
@@ -282,16 +395,27 @@ const serverModes = {
     connection.workspace.onWillRenameFiles(server.willRenameFiles.bind(server));
 
     connection.listen();
+
+    socket.addEventListener("close", () => {
+      connection.dispose();
+    });
   },
   python: (socket, getConnection) => {
     const pylsp = spawn("pylsp", [
       "--check-parent-process",
-      "--ws", "--port", "3031",
+      "--ws",
+      "--port",
+      "3031",
     ]);
-    let ws, queue = [];
+    let ws,
+      queue = [];
 
     pylsp.on("error", () => {
       socket.close();
+    });
+
+    socket.addEventListener("close", () => {
+      pylsp.kill();
     });
 
     socket.addEventListener("message", ({ data }) => {
@@ -312,12 +436,12 @@ const serverModes = {
         ws.addEventListener("open", () => {
           queue.map((i) => ws.send(i));
         });
-  
+
         socket.addEventListener("close", () => {
           ws.close();
         });
       } catch {
-        setTimeout(open, 1000)
+        setTimeout(open, 1000);
       }
     };
 
@@ -331,31 +455,29 @@ expressWs(app);
 // WebSocket endpoint
 app.ws("/:mode", async (socket, req) => {
   let mode = req.params.mode;
+  let module = serverModes[mode];
+  if (!module) return;
+
   console.log("Connected to client:", mode);
-
-  // let server = servers.get(mode);
-
-  // if (!server) {
-    let module = serverModes[mode];
-    if (!module) return;
-
-    server = await module(socket, (...args) =>
+  let currentServer = servers.get(mode), proxySocket;
+  if (!currentServer) {
+    proxySocket = new WebSocketProxy();
+    let server = await module(proxySocket, (...args) =>
       createConnection(
-        new WebsocketMessageReader(sockWrapper(socket)),
-        new WebsocketMessageWriter(socket),
+        new WebSocketMessageReader(sockWrapper(proxySocket)),
+        new WebSocketMessageWriter(proxySocket),
         ...args
       )
     );
-    // servers.set(mode, server);
-  // }
-
-  // socket.on("message", (msg) => {
-  //   console.log(`WebSocket message received: ${msg}`);
-  // });
-
-  // socket.on("close", () => {
-  //   console.log("WebSocket closed");
-  // });
+    
+    servers.set({
+      proxySocket, server
+    });
+  } else {
+    proxySocket = currentSocket.proxySocket;
+  }
+  
+  proxySocket.initialize(socket);
 });
 
 // Start the server

@@ -11,7 +11,7 @@ To setup and run this plugin locally:
 - Clone this repo (`git clone https://github.com/7HR4IZ3/acode-language-server`)
 - Change directory (`cd acode-language-server`)
 - Run `npm install`
-- Start server (`node server.js`)
+- Start server (`node server.mjs`)
 
 
 ## Contributing
