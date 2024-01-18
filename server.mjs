@@ -1,6 +1,7 @@
 import express from "express";
 import expressWs from "express-ws";
 import { spawn } from "node:child_process";
+import Buffer from "node:buffer";
 import WebSocket from "ws";
 
 import {
@@ -20,11 +21,11 @@ import { getLanguageService as htmlLanguageServer } from "vscode-html-languagese
 // } from "vscode-jsonrpc/node.js";
 
 import { TextDocument } from "vscode-languageserver-textdocument";
+
 import {
   WebSocketMessageReader,
   WebSocketMessageWriter,
 } from "vscode-ws-jsonrpc";
-
 
 class WebSocketProxy extends EventTarget {
   onopen;
@@ -64,6 +65,7 @@ class WebSocketProxy extends EventTarget {
     };
 
     connection.onmessage = (event) => {
+      // console.log("Received:", event.data);
       this.dispatchEvent(
         new MessageEvent("message", {
           data: event.data,
@@ -127,39 +129,87 @@ function sockWrapper(socket) {
   };
 }
 
-function proxyServer(websocket, command, args) {
+function addHeaders(data) {
+  let length = data.length;
+  return (
+    "Content-Length: " +
+    String(length) +
+    "\r\n" +
+    "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n" +
+    data
+  );
+}
+
+function stripHeaders(data) {
+  return data.toString().split("\r\n\r\n")[1];
+}
+
+function proxyServer(websocket, command, args, sendCallback) {
   // Start the language server subprocess
   const languageServer = spawn(command, args || [], {
-    stdio: ["pipe", "pipe", "pipe"],
+    // stdio: ["pipe", "pipe", "pipe"],
+    shell: true,
   });
+  let messageQueue = [],
+    spawned = false;
 
   // Create separate streams for stdin and stdout
   const stdinStream = languageServer.stdin;
   const stdoutStream = languageServer.stdout;
 
   // Pipe data from the WebSocket to the language server stdin
-  websocket.on("message", (data) => {
-    stdinStream.write(data);
+  websocket.addEventListener("message", ({ data }) => {
+    data = addHeaders(data);
+    // data = Buffer.from(data);
+    if (sendCallback) {
+      data = sendCallback(data);
+    }
+    // console.log("Received:", data);
+    if (spawned) {
+      stdinStream.write(data);
+    } else {
+      messageQueue.push(data);
+    }
   });
 
   // Pipe data from the language server stdout to the WebSocket
   stdoutStream.on("data", (data) => {
-    websocket.send(data);
+    data
+      .toString()
+      .split("Content-Length")
+      .map((i) => i.split("\r\n").at(-1).trim())
+      .map((item) => {
+        if (item.startsWith("{")) {
+          console.log("Sending:", item);
+          websocket.send(item);
+        }
+      });
   });
 
   // Handle the closure of WebSocket
-  websocket.on("close", () => {
+  websocket.addEventListener("close", () => {
+    // console.log("Closed websocket.")
     languageServer.kill();
+  });
+
+  languageServer.on("spawn", () => {
+    spawned = true;
+    messageQueue.map((data) => stdinStream.write(data));
+    messageQueue = [];
   });
 
   // Handle the closure of language server
   languageServer.on("close", () => {
+    // console.log("Closing process.")
     websocket.close();
   });
 
-  languageServer.on("error", () => {
+  languageServer.on("error", (...args) => {
+    // console.log("Error in process:", ...args);
     websocket.close();
   });
+
+  return languageServer;
 }
 
 const app = express();
@@ -177,6 +227,11 @@ const serverModes = {
   svelte: (socket, getConnection) => {
     let ls = require("svelte-language-server/dist/src/server.js");
     return ls.startServer({ connection: getConnection() });
+  },
+  cpp: (socket, getConnection) => {
+    return proxyServer(socket, "clangd", [], (data) => {
+      return data.replaceAll('"uri":"/', '"uri":"file:///');
+    });
   },
   html: async (socket, getConnection) => {
     let defaultSettings = { maxNumberOfProblems: 1000 };
@@ -310,21 +365,38 @@ const serverModes = {
 
     return connection;
   },
-  vue: (socket, getConnection) => {
-    const { startLanguageServer } = require("@volar/language-server/node");
-    const {
-      createServerPlugin,
-    } = require("@vue/language-server/out/languageServerPlugin");
+  vue: async (socket, getConnection) => {
+    const { VLS } = await import(
+      "vls/dist/vls.js"
+      // new URL("./vls/dist/services/vls.js", import.meta.url)
+    );
 
     const connection = createConnection(
       new WebSocketMessageReader(sockWrapper(socket)),
       new WebSocketMessageWriter(socket),
       ProposedFeatures.all
     );
-    let vuePlugin = createServerPlugin(connection);
 
-    return startLanguageServer(connection, vuePlugin);
+    let vls = new VLS(connection);
+    connection.onInitialize(
+      async (params) => {
+        await vls.init(params);
+        connection.console.log(
+          'Vue Language Server Initialized.'
+        );
+        return { capabilities: vls.capabilities };
+      }
+    );
+
+    vls.listen();
+    return vls;
   },
+  // vue(socket, getConnection) {
+  //   return proxyServer(socket, "node", [
+  //     "./vls/dist/vueServerMain.js",
+  //     "--stdio",
+  //   ]);
+  // },
   typescript: async (socket, getConnection) => {
     const { LspServer, LspClientImpl, LspClientLogger } = await import(
       "./tslangserver.mjs"
@@ -401,51 +473,12 @@ const serverModes = {
     });
   },
   python: (socket, getConnection) => {
-    const pylsp = spawn("pylsp", [
-      "--check-parent-process",
-      "--ws",
-      "--port",
-      "3031",
-    ]);
-    let ws,
-      queue = [];
-
-    pylsp.on("error", () => {
-      socket.close();
-    });
-
-    socket.addEventListener("close", () => {
-      pylsp.kill();
-    });
-
-    socket.addEventListener("message", ({ data }) => {
-      if (ws) {
-        ws.send(data);
-      } else {
-        queue.push(data);
-      }
-    });
-
-    let open = () => {
-      try {
-        ws = new WebSocket("ws://127.0.0.1:3031");
-        ws.addEventListener("message", ({ data }) => {
-          socket.send(data);
-        });
-
-        ws.addEventListener("open", () => {
-          queue.map((i) => ws.send(i));
-        });
-
-        socket.addEventListener("close", () => {
-          ws.close();
-        });
-      } catch {
-        setTimeout(open, 1000);
-      }
-    };
-
-    pylsp.on("spawn", () => setTimeout(open, 2000));
+    return proxyServer(
+      socket, "pylsp", ["--check-parent-process"]
+    );
+  },
+  java: (socket, getConnection) => {
+    return proxyServer(socket, "~/jdtls/bin/jdtls");
   },
 };
 
@@ -459,7 +492,8 @@ app.ws("/:mode", async (socket, req) => {
   if (!module) return;
 
   console.log("Connected to client:", mode);
-  let currentServer = servers.get(mode), proxySocket;
+  let currentServer = servers.get(mode),
+    proxySocket;
   if (!currentServer) {
     proxySocket = new WebSocketProxy();
     let server = await module(proxySocket, (...args) =>
@@ -469,14 +503,17 @@ app.ws("/:mode", async (socket, req) => {
         ...args
       )
     );
-    
-    servers.set({
-      proxySocket, server
-    });
+
+    if (server) {
+      servers.set({
+        proxySocket,
+        server,
+      });
+    }
   } else {
     proxySocket = currentSocket.proxySocket;
   }
-  
+
   proxySocket.initialize(socket);
 });
 
