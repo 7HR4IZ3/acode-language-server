@@ -3,8 +3,8 @@
   "version": "1.0.2",
   "description": "Server for Acode Language Server Plugin",
   "main": "server.js",
-  "repository": "https://github.com/deadlyjack/acode-plugin.git",
-  "author": "Ajit <me@ajitkumar.dev>",
+  "repository": "https://github.com/7HR4IZ3/acode-language-server.git",
+  "author": "Thraize",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
@@ -21,17 +21,10 @@
     "vscode-languageserver-textdocument": "^1.0.8",
     "vscode-languageserver-types": "^3.17.3",
     "vscode-jsonrpc": "^2.0.1",
-    "vscode-ws-jsonrpc": "^2.0.1",
-    "websocket": "^1.0.34",
-    "ws": "^8.16.0"
+    "vscode-ws-jsonrpc": "^2.0.1"
   },
-  "devDependencies": {
-  },
+  "devDependencies": {},
   "browserslist": [
     "> 0.25%, not dead"
-  ],
-  "resolutions": {
-    "terser": ">=5.14.2 ",
-    "glob-parent": ">=5.1.2"
-  }
+  ]
 }

@@ -1,8 +1,7 @@
 import express from "express";
 import expressWs from "express-ws";
 import { spawn } from "node:child_process";
-import Buffer from "node:buffer";
-import WebSocket from "ws";
+// import Buffer from "node:buffer";
 
 import {
   createConnection,
@@ -12,14 +11,6 @@ import {
 } from "vscode-languageserver/node.js";
 
 import { getLanguageService as htmlLanguageServer } from "vscode-html-languageservice";
-
-// import {
-//   AbstractMessageReader,
-//   AbstractMessageWriter,
-//   IPCMessageReader,
-//   IPCMessageWriter,
-// } from "vscode-jsonrpc/node.js";
-
 import { TextDocument } from "vscode-languageserver-textdocument";
 
 import {
@@ -43,7 +34,7 @@ class WebSocketProxy extends EventTarget {
     if (this.connection) {
       return this.connection.readyState;
     }
-    return WebSocket.CLOSED;
+    return 3;
   }
 
   initialize(connection) {
@@ -92,13 +83,13 @@ class WebSocketProxy extends EventTarget {
   }
 
   send(data) {
-    // console.log("Sending:", data);
+    // console.log("[Sending]:", data);
     if (this.connection) {
-      if (this.connection.readyState === WebSocket.OPEN) {
+      if (this.connection.readyState === 1) {
         this.connection.send(data);
       } else {
         this.sendQueue.push(data);
-        console.warn("WebSocket not open. Unable to send data.");
+        console.log("[Server]", "WebSocket not open. Unable to send data.");
       }
     } else {
       this.sendQueue.push(data);
@@ -130,12 +121,12 @@ function sockWrapper(socket) {
 }
 
 function addHeaders(data) {
+  data = data.trim();
   let length = data.length;
+  // console.log(data, data.length)
   return (
     "Content-Length: " +
-    String(length) +
-    "\r\n" +
-    "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n" +
+    String(length) + "\r\n\r\n" +
     data
   );
 }
@@ -159,12 +150,12 @@ function proxyServer(websocket, command, args, sendCallback) {
 
   // Pipe data from the WebSocket to the language server stdin
   websocket.addEventListener("message", ({ data }) => {
-    data = addHeaders(data);
     // data = Buffer.from(data);
     if (sendCallback) {
       data = sendCallback(data);
     }
-    // console.log("Received:", data);
+    data = addHeaders(data);
+    console.log("Received:", data);
     if (spawned) {
       stdinStream.write(data);
     } else {
@@ -466,11 +457,11 @@ const serverModes = {
     );
     connection.workspace.onWillRenameFiles(server.willRenameFiles.bind(server));
 
-    connection.listen();
 
     socket.addEventListener("close", () => {
       connection.dispose();
     });
+    connection.listen();
   },
   python: (socket, getConnection) => {
     return proxyServer(
@@ -478,7 +469,10 @@ const serverModes = {
     );
   },
   java: (socket, getConnection) => {
-    return proxyServer(socket, "~/jdtls/bin/jdtls");
+    return proxyServer(socket, "~/jdtls/bin/jdtls", [], (data) => {
+    	return data.replaceAll('"uri":"/', '"uri":"file:///')
+    		.replaceAll('"url":"/', '"url":"file:///');
+    });
   },
 };
 
@@ -486,7 +480,7 @@ const serverModes = {
 expressWs(app);
 
 // WebSocket endpoint
-app.ws("/:mode", async (socket, req) => {
+app.ws("/server/:mode", async (socket, req) => {
   let mode = req.params.mode;
   let module = serverModes[mode];
   if (!module) return;
@@ -496,6 +490,8 @@ app.ws("/:mode", async (socket, req) => {
     proxySocket;
   if (!currentServer) {
     proxySocket = new WebSocketProxy();
+    proxySocket.initialize(socket);
+
     let server = await module(proxySocket, (...args) =>
       createConnection(
         new WebSocketMessageReader(sockWrapper(proxySocket)),
@@ -505,17 +501,40 @@ app.ws("/:mode", async (socket, req) => {
     );
 
     if (server) {
-      servers.set({
+      servers.set(mode, {
         proxySocket,
         server,
       });
     }
   } else {
-    proxySocket = currentSocket.proxySocket;
+    proxySocket = currentServer.proxySocket;
+    proxySocket.initialize(socket);
+  }
+});
+
+app.ws("/auto/:command", async (socket, request) => {
+  let command = request.params.command;
+
+  let currentServer = servers.get(command), proxySocket;
+  console.log("Connected to auto client:", command);
+  if (!currentServer) {
+    proxySocket = new WebSocketProxy();
+    let server = proxyServer(
+      proxySocket, command, request.query.args || [],
+      (data) => data
+      	.replaceAll('"url":"/', '"url":"file:///')
+      	.replaceAll('"uri":"/', '"uri":"file:///')
+    );
+
+    if (server) {
+      servers.set(command, { proxySocket, server });
+    }
+  } else {
+    proxySocket = currentServer.proxySocket;
   }
 
   proxySocket.initialize(socket);
-});
+})
 
 // Start the server
 app.listen(port, () => {
