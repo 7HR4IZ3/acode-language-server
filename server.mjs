@@ -7,7 +7,7 @@ import {
   createConnection,
   TextDocuments,
   ProposedFeatures,
-  TextDocumentSyncKind,
+  TextDocumentSyncKind
 } from "vscode-languageserver/node.js";
 
 import { getLanguageService as htmlLanguageServer } from "vscode-html-languageservice";
@@ -15,7 +15,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 
 import {
   WebSocketMessageReader,
-  WebSocketMessageWriter,
+  WebSocketMessageWriter
 } from "vscode-ws-jsonrpc";
 
 class WebSocketProxy extends EventTarget {
@@ -44,39 +44,39 @@ class WebSocketProxy extends EventTarget {
     }
 
     this.connection = connection;
-    connection.onopen = (event) => {
+    connection.onopen = event => {
       this.dispatchEvent(new Event("open"));
       this.onopen?.(event);
 
       if (this.sendQueue.length) {
         let newQueue = [...this.sendQueue];
         this.sendQueue = [];
-        newQueue.map((data) => this.send(data));
+        newQueue.map(data => this.send(data));
       }
     };
 
-    connection.onmessage = (event) => {
+    connection.onmessage = event => {
       // console.log("Received:", event.data);
       this.dispatchEvent(
         new MessageEvent("message", {
-          data: event.data,
+          data: event.data
         })
       );
       this.onmessage?.(event);
     };
 
-    connection.onclose = (event) => {
+    connection.onclose = event => {
       this.dispatchEvent(
         new Event("close", {
           reason: event.reason,
           code: event.code,
-          wasClean: event.wasClean,
+          wasClean: event.wasClean
         })
       );
       this.onclose?.(event);
     };
 
-    connection.onerror = (error) => {
+    connection.onerror = error => {
       this.dispatchEvent(new Event("error"));
       this.onerror?.(error);
     };
@@ -116,7 +116,7 @@ function sockWrapper(socket) {
     },
     onClose(callback) {
       return socket.addEventListener("close", callback);
-    },
+    }
   };
 }
 
@@ -124,11 +124,7 @@ function addHeaders(data) {
   data = data.trim();
   let length = data.length;
   // console.log(data, data.length)
-  return (
-    "Content-Length: " +
-    String(length) + "\r\n\r\n" +
-    data
-  );
+  return "Content-Length: " + String(length) + "\r\n\r\n" + data;
 }
 
 function stripHeaders(data) {
@@ -139,7 +135,7 @@ function proxyServer(websocket, command, args, sendCallback) {
   // Start the language server subprocess
   const languageServer = spawn(command, args || [], {
     // stdio: ["pipe", "pipe", "pipe"],
-    shell: true,
+    shell: true
   });
   let messageQueue = [],
     spawned = false;
@@ -155,7 +151,7 @@ function proxyServer(websocket, command, args, sendCallback) {
       data = sendCallback(data);
     }
     data = addHeaders(data);
-    console.log("Received:", data);
+    // console.log("Received:", data);
     if (spawned) {
       stdinStream.write(data);
     } else {
@@ -164,14 +160,14 @@ function proxyServer(websocket, command, args, sendCallback) {
   });
 
   // Pipe data from the language server stdout to the WebSocket
-  stdoutStream.on("data", (data) => {
+  stdoutStream.on("data", data => {
     data
       .toString()
       .split("Content-Length")
-      .map((i) => i.split("\r\n").at(-1).trim())
-      .map((item) => {
+      .map(i => i.split("\r\n").at(-1).trim())
+      .map(item => {
         if (item.startsWith("{")) {
-          console.log("Sending:", item);
+          // console.log("Sending:", item);
           websocket.send(item);
         }
       });
@@ -185,7 +181,7 @@ function proxyServer(websocket, command, args, sendCallback) {
 
   languageServer.on("spawn", () => {
     spawned = true;
-    messageQueue.map((data) => stdinStream.write(data));
+    messageQueue.map(data => stdinStream.write(data));
     messageQueue = [];
   });
 
@@ -220,7 +216,7 @@ const serverModes = {
     return ls.startServer({ connection: getConnection() });
   },
   cpp: (socket, getConnection) => {
-    return proxyServer(socket, "clangd", [], (data) => {
+    return proxyServer(socket, "clangd", [], data => {
       return data.replaceAll('"uri":"/', '"uri":"file:///');
     });
   },
@@ -236,7 +232,7 @@ const serverModes = {
       ProposedFeatures.all
     );
 
-    connection.onInitialize((params) => {
+    connection.onInitialize(params => {
       const capabilities = params.capabilities;
 
       // Does the client support the `workspace/configuration` request?
@@ -259,30 +255,30 @@ const serverModes = {
           // Tell the client that this server supports code completion.
           hoverProvider: true,
           completionProvider: {
-            resolveProvider: true,
+            resolveProvider: true
           },
           workspace: {
             workspaceFolders: {
               supported: false,
-              changeNotifications: false,
-            },
+              changeNotifications: false
+            }
           },
-          colorProvider: true,
-        },
+          colorProvider: true
+        }
       };
       if (hasWorkspaceFolderCapability) {
         result.capabilities.workspace = {
           workspaceFolders: {
             supported: true,
-            changeNotifications: true,
-          },
+            changeNotifications: true
+          }
         };
       }
       return result;
     });
 
     // Cache the settings of all open documents
-    connection.onDidChangeConfiguration((change) => {
+    connection.onDidChangeConfiguration(change => {
       if (hasConfigurationCapability) {
         documentSettings.clear();
       } else {
@@ -293,18 +289,18 @@ const serverModes = {
       // documents.all().forEach(validateTextDocument);
     });
 
-    connection.onCompletion((params) => {
+    connection.onCompletion(params => {
       let document = documents.get(params.textDocument.uri);
       if (!document) return null;
       let htmlDocument = service.parseHTMLDocument(document);
       return service.doComplete(document, params.position, htmlDocument);
     });
 
-    connection.onCompletionResolve((params) => {
+    connection.onCompletionResolve(params => {
       return params;
     });
 
-    connection.onRenameRequest((params) => {
+    connection.onRenameRequest(params => {
       let document = documents.get(params.textDocument.uri);
       if (!document) return null;
       let htmlDocument = service.parseHTMLDocument(document);
@@ -316,7 +312,7 @@ const serverModes = {
       );
     });
 
-    connection.onDocumentHighlight((params) => {
+    connection.onDocumentHighlight(params => {
       let document = documents.get(params.textDocument.uri);
       if (!document) return null;
       let htmlDocument = service.parseHTMLDocument(document);
@@ -327,13 +323,13 @@ const serverModes = {
       );
     });
 
-    connection.onDocumentFormatting((params) => {
+    connection.onDocumentFormatting(params => {
       let document = documents.get(params.textDocument.uri);
       if (!document) return null;
       return service.format(document, undefined, params.options);
     });
 
-    connection.onRequest("textDocument/hover", (params) => {
+    connection.onRequest("textDocument/hover", params => {
       let document = documents.get(params.textDocument.uri);
       if (!document) return null;
       let htmlDocument = service.parseHTMLDocument(document);
@@ -341,13 +337,13 @@ const serverModes = {
     });
 
     // Only keep settings for open documents
-    documents.onDidClose((e) => {
+    documents.onDidClose(e => {
       documentSettings.delete(e.document.uri);
     });
 
     // The content of a text document has changed. This event is emitted
     // when the text document first opened or when its content has changed.
-    documents.onDidChangeContent((change) => {
+    documents.onDidChangeContent(change => {
       // validateTextDocument(change.document);
     });
 
@@ -369,15 +365,11 @@ const serverModes = {
     );
 
     let vls = new VLS(connection);
-    connection.onInitialize(
-      async (params) => {
-        await vls.init(params);
-        connection.console.log(
-          'Vue Language Server Initialized.'
-        );
-        return { capabilities: vls.capabilities };
-      }
-    );
+    connection.onInitialize(async params => {
+      await vls.init(params);
+      connection.console.log("Vue Language Server Initialized.");
+      return { capabilities: vls.capabilities };
+    });
 
     vls.listen();
     return vls;
@@ -457,23 +449,28 @@ const serverModes = {
     );
     connection.workspace.onWillRenameFiles(server.willRenameFiles.bind(server));
 
-
     socket.addEventListener("close", () => {
       connection.dispose();
     });
     connection.listen();
   },
   python: (socket, getConnection) => {
-    return proxyServer(
-      socket, "pylsp", ["--check-parent-process"]
-    );
+    return proxyServer(socket, "pylsp", ["--check-parent-process"]);
   },
   java: (socket, getConnection) => {
-    return proxyServer(socket, "~/jdtls/bin/jdtls", [], (data) => {
-    	return data.replaceAll('"uri":"/', '"uri":"file:///')
-    		.replaceAll('"url":"/', '"url":"file:///');
+    return proxyServer(socket, "~/jdtls/bin/jdtls", [], data => {
+      return data
+        .replaceAll('"uri":"/', '"uri":"file:///')
+        .replaceAll('"url":"/', '"url":"file:///');
     });
   },
+  rust: (socket, getConnection) => {
+    return proxyServer(socket, "rust-analyzer", [], data => {
+      return data
+        .replaceAll('"uri":"/', '"uri":"file:///')
+        .replaceAll('"url":"/', '"url":"file:///');
+    });
+  }
 };
 
 // Enable WebSocket support
@@ -503,7 +500,7 @@ app.ws("/server/:mode", async (socket, req) => {
     if (server) {
       servers.set(mode, {
         proxySocket,
-        server,
+        server
       });
     }
   } else {
@@ -515,15 +512,19 @@ app.ws("/server/:mode", async (socket, req) => {
 app.ws("/auto/:command", async (socket, request) => {
   let command = request.params.command;
 
-  let currentServer = servers.get(command), proxySocket;
+  let currentServer = servers.get(command),
+    proxySocket;
   console.log("Connected to auto client:", command);
   if (!currentServer) {
     proxySocket = new WebSocketProxy();
     let server = proxyServer(
-      proxySocket, command, request.query.args || [],
-      (data) => data
-      	.replaceAll('"url":"/', '"url":"file:///')
-      	.replaceAll('"uri":"/', '"uri":"file:///')
+      proxySocket,
+      command,
+      request.query.args || [],
+      data =>
+        data
+          .replaceAll('"url":"/', '"url":"file:///')
+          .replaceAll('"uri":"/', '"uri":"file:///')
     );
 
     if (server) {
@@ -534,7 +535,7 @@ app.ws("/auto/:command", async (socket, request) => {
   }
 
   proxySocket.initialize(socket);
-})
+});
 
 // Start the server
 app.listen(port, () => {
