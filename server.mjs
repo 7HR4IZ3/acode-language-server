@@ -157,7 +157,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       data = callback(data);
     }
     data = addHeaders(data, seperator || "\r\n\r\n");
-    console.log("Received:", data);
+    // console.log("Received:", data);
     if (spawned) {
       stdinStream.write(data);
     } else {
@@ -190,7 +190,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       const completeMessage = chunks2.join("").substring(0, expectedLength);
       // Do something with the completeMessage
 
-      console.log("Sending:", completeMessage);
+      // console.log("Sending:", completeMessage);
       websocket.send(completeMessage);
 
       // Reset variables for the next message
@@ -484,29 +484,6 @@ const serverModes = {
           .replaceAll('"url":"/', '"url":"file:///');
       }
     });
-  },
-  dart: (socket, getConnection) => {
-    return proxyServer(socket, "dart", ["language-server"], {
-      callback: data => {
-        return data
-          .replaceAll('"uri":"/', '"uri":"file:///')
-          .replaceAll('"url":"/', '"url":"file:///');
-      }
-    });
-  },
-  php: (socket, getConnection) => {
-    return proxyServer(
-      socket,
-      "/data/data/com.termux/files/usr/bin/phpactor",
-      ["language-server"],
-      {
-        callback: data => {
-          return data
-            .replaceAll('"uri":"/', '"uri":"file:///')
-            .replaceAll('"url":"/', '"url":"file:///');
-        }
-      }
-    );
   }
 };
 
