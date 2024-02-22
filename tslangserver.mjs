@@ -28043,6 +28043,14 @@ export class LspServer {
       tsserver?.fallbackPath
     );
     if (typescriptVersion) {
+      this.options.lspClient.sendNotification(
+        "language/details", {
+          name: "typescript",
+          version: typescriptVersion.versionString,
+          path: typescriptVersion.tsServerPath
+        }
+      );
+
       this.options.lspClient.logMessage({
         type: main$3.MessageType.Info,
         message: `Using Typescript version (${typescriptVersion.source}) ${typescriptVersion.versionString} from path "${typescriptVersion.tsServerPath}"`,

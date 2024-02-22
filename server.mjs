@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import express from "express";
 import expressWs from "express-ws";
 import { spawn } from "node:child_process";
@@ -120,18 +122,18 @@ function sockWrapper(socket) {
   };
 }
 
-function addHeaders(data) {
+function addHeaders(data, sep) {
   data = data.trim();
   let length = data.length;
   // console.log(data, data.length)
-  return "Content-Length: " + String(length) + "\r\n\r\n" + data;
+  return "Content-Length: " + String(length) + sep + data;
 }
 
 function stripHeaders(data) {
   return data.toString().split("\r\n\r\n")[1];
 }
 
-function proxyServer(websocket, command, args, sendCallback) {
+function proxyServer(websocket, command, args, { callback, seperator } = {}) {
   // Start the language server subprocess
   const languageServer = spawn(command, args || [], {
     // stdio: ["pipe", "pipe", "pipe"],
@@ -144,14 +146,18 @@ function proxyServer(websocket, command, args, sendCallback) {
   const stdinStream = languageServer.stdin;
   const stdoutStream = languageServer.stdout;
 
+  let chunks = [];
+  let chunks2 = [];
+  let expectedLength = null;
+
   // Pipe data from the WebSocket to the language server stdin
   websocket.addEventListener("message", ({ data }) => {
     // data = Buffer.from(data);
-    if (sendCallback) {
-      data = sendCallback(data);
+    if (callback) {
+      data = callback(data);
     }
-    data = addHeaders(data);
-    // console.log("Received:", data);
+    data = addHeaders(data, seperator || "\r\n\r\n");
+    console.log("Received:", data);
     if (spawned) {
       stdinStream.write(data);
     } else {
@@ -161,16 +167,36 @@ function proxyServer(websocket, command, args, sendCallback) {
 
   // Pipe data from the language server stdout to the WebSocket
   stdoutStream.on("data", data => {
-    data
-      .toString()
-      .split("Content-Length")
-      .map(i => i.split("\r\n").at(-1).trim())
-      .map(item => {
-        if (item.startsWith("{")) {
-          // console.log("Sending:", item);
-          websocket.send(item);
-        }
-      });
+    let dataString = data.toString();
+
+    // console.log("Raw:", dataString);
+
+    // Check if the data contains 'Content-Length'
+    if (dataString.includes("Content-Length")) {
+      // Extract the content length
+      const contentLengthMatch = dataString.match(/Content-Length: (\d+)/);
+      if (contentLengthMatch) {
+        expectedLength = parseInt(contentLengthMatch[1], 10);
+      }
+      dataString = dataString.split("\r\n\r\n")[1];
+    }
+
+    // Add the data to the chunks array
+    chunks2.push(dataString);
+
+    // Check if the total length of chunks is greater than or equal to expected length
+    if (expectedLength && chunks2.join("").length >= expectedLength) {
+      // Process the complete message
+      const completeMessage = chunks2.join("").substring(0, expectedLength);
+      // Do something with the completeMessage
+
+      console.log("Sending:", completeMessage);
+      websocket.send(completeMessage);
+
+      // Reset variables for the next message
+      chunks2 = [];
+      expectedLength = null;
+    }
   });
 
   // Handle the closure of WebSocket
@@ -187,12 +213,12 @@ function proxyServer(websocket, command, args, sendCallback) {
 
   // Handle the closure of language server
   languageServer.on("close", () => {
-    // console.log("Closing process.")
+    console.log("Closing process.");
     websocket.close();
   });
 
   languageServer.on("error", (...args) => {
-    // console.log("Error in process:", ...args);
+    console.log("Error:", ...args);
     websocket.close();
   });
 
@@ -216,8 +242,10 @@ const serverModes = {
     return ls.startServer({ connection: getConnection() });
   },
   cpp: (socket, getConnection) => {
-    return proxyServer(socket, "clangd", [], data => {
-      return data.replaceAll('"uri":"/', '"uri":"file:///');
+    return proxyServer(socket, "clangd", [], {
+      callback: data => {
+        return data.replaceAll('"uri":"/', '"uri":"file:///');
+      }
     });
   },
   html: async (socket, getConnection) => {
@@ -352,34 +380,6 @@ const serverModes = {
 
     return connection;
   },
-  vue: async (socket, getConnection) => {
-    const { VLS } = await import(
-      "vls/dist/vls.js"
-      // new URL("./vls/dist/services/vls.js", import.meta.url)
-    );
-
-    const connection = createConnection(
-      new WebSocketMessageReader(sockWrapper(socket)),
-      new WebSocketMessageWriter(socket),
-      ProposedFeatures.all
-    );
-
-    let vls = new VLS(connection);
-    connection.onInitialize(async params => {
-      await vls.init(params);
-      connection.console.log("Vue Language Server Initialized.");
-      return { capabilities: vls.capabilities };
-    });
-
-    vls.listen();
-    return vls;
-  },
-  // vue(socket, getConnection) {
-  //   return proxyServer(socket, "node", [
-  //     "./vls/dist/vueServerMain.js",
-  //     "--stdio",
-  //   ]);
-  // },
   typescript: async (socket, getConnection) => {
     const { LspServer, LspClientImpl, LspClientLogger } = await import(
       "./tslangserver.mjs"
@@ -458,18 +458,55 @@ const serverModes = {
     return proxyServer(socket, "pylsp", ["--check-parent-process"]);
   },
   java: (socket, getConnection) => {
-    return proxyServer(socket, "~/jdtls/bin/jdtls", [], data => {
-      return data
-        .replaceAll('"uri":"/', '"uri":"file:///')
-        .replaceAll('"url":"/', '"url":"file:///');
+    return proxyServer(socket, "~/jdtls/bin/jdtls", [], {
+      callback: data => {
+        return data
+          .replaceAll('"uri":"/', '"uri":"file:///')
+          .replaceAll('"url":"/', '"url":"file:///');
+      }
     });
   },
   rust: (socket, getConnection) => {
-    return proxyServer(socket, "rust-analyzer", [], data => {
-      return data
-        .replaceAll('"uri":"/', '"uri":"file:///')
-        .replaceAll('"url":"/', '"url":"file:///');
+    return proxyServer(socket, "rust-analyzer", [], {
+      callback: data => {
+        return data
+          .replaceAll('"uri":"/', '"uri":"file:///')
+          .replaceAll('"url":"/', '"url":"file:///');
+      },
+      seperator: "\n\n"
     });
+  },
+  vue: (socket, getConnection) => {
+    return proxyServer(socket, "vls", [], {
+      callback: data => {
+        return data
+          .replaceAll('"uri":"/', '"uri":"file:///')
+          .replaceAll('"url":"/', '"url":"file:///');
+      }
+    });
+  },
+  dart: (socket, getConnection) => {
+    return proxyServer(socket, "dart", ["language-server"], {
+      callback: data => {
+        return data
+          .replaceAll('"uri":"/', '"uri":"file:///')
+          .replaceAll('"url":"/', '"url":"file:///');
+      }
+    });
+  },
+  php: (socket, getConnection) => {
+    return proxyServer(
+      socket,
+      "/data/data/com.termux/files/usr/bin/phpactor",
+      ["language-server"],
+      {
+        callback: data => {
+          return data
+            .replaceAll('"uri":"/', '"uri":"file:///')
+            .replaceAll('"url":"/', '"url":"file:///');
+        }
+      }
+    );
   }
 };
 
@@ -510,21 +547,30 @@ app.ws("/server/:mode", async (socket, req) => {
 });
 
 app.ws("/auto/:command", async (socket, request) => {
-  let command = request.params.command;
+  let paramCommand = decodeURIComponent(request.params.command);
+  let [command, ...args] = paramCommand.split(" ");
 
   let currentServer = servers.get(command),
     proxySocket;
   console.log("Connected to auto client:", command);
+
+  console.log(command, request.query.args);
   if (!currentServer) {
     proxySocket = new WebSocketProxy();
     let server = proxyServer(
       proxySocket,
       command,
-      request.query.args || [],
-      data =>
-        data
-          .replaceAll('"url":"/', '"url":"file:///')
-          .replaceAll('"uri":"/', '"uri":"file:///')
+      request.query.args ? JSON.parse(request.query.args) : args,
+      {
+        callback: data => {
+          if (request.query.rawuri === "true") {
+            return data;
+          }
+          return data
+            .replaceAll('"uri":"/', '"uri":"file:///')
+            .replaceAll('"url":"/', '"url":"file:///');
+        }
+      }
     );
 
     if (server) {

@@ -1,8 +1,11 @@
 {
-  "name": "acode-language-server",
+  "name": "acode-lsp",
   "version": "1.0.2",
   "description": "Server for Acode Language Server Plugin",
-  "main": "server.js",
+  "main": "server.mjs",
+  "bin": {
+    "acode-ls": "server.mjs"
+  },
   "repository": "https://github.com/7HR4IZ3/acode-language-server.git",
   "author": "Thraize",
   "license": "MIT",
@@ -12,18 +15,17 @@
     "ts-loader": "^9.5.1",
     "typescript": "^5.3.3",
     "typescript-language-server": "^4.2.0",
+    "vscode-css-languageservice": "^6.2.6",
+    "vscode-html-languageservice": "^5.0.6",
+    "vscode-json-languageservice": "^5.3.5",
+    "vscode-jsonrpc": "^2.0.1",
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
-    "vscode-html-languageservice": "^5.0.6",
-    "vscode-css-languageservice": "^6.2.6",
-    "vscode-json-languageservice": "^5.3.5",
     "vscode-languageserver-protocol": "^3.17.3",
     "vscode-languageserver-textdocument": "^1.0.8",
     "vscode-languageserver-types": "^3.17.3",
-    "vscode-jsonrpc": "^2.0.1",
     "vscode-ws-jsonrpc": "^2.0.1"
   },
-  "devDependencies": {},
   "browserslist": [
     "> 0.25%, not dead"
   ]
