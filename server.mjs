@@ -20,6 +20,8 @@ import {
   WebSocketMessageWriter
 } from "vscode-ws-jsonrpc";
 
+const VERSION = "1.0.4";
+
 class WebSocketProxy extends EventTarget {
   onopen;
   onclose;
@@ -58,7 +60,7 @@ class WebSocketProxy extends EventTarget {
     };
 
     connection.onmessage = event => {
-      // console.log("Received:", event.data);
+      // console.log("[Received]:", event.data);
       this.dispatchEvent(
         new MessageEvent("message", {
           data: event.data
@@ -157,7 +159,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       data = callback(data);
     }
     data = addHeaders(data, seperator || "\r\n\r\n");
-    // console.log("Received:", data);
+    console.log("Received:", data);
     if (spawned) {
       stdinStream.write(data);
     } else {
@@ -169,7 +171,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
   stdoutStream.on("data", data => {
     let dataString = data.toString();
 
-    // console.log("Raw:", dataString);
+    console.log("Raw:", dataString);
 
     // Check if the data contains 'Content-Length'
     if (dataString.includes("Content-Length")) {
@@ -180,6 +182,11 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       }
       dataString = dataString.split("\r\n\r\n")[1];
     }
+    
+    if (expectedLength && dataString.length >= expectedLength) {
+      console.log("Sending:", dataString);
+      return websocket.send(dataString);
+    }
 
     // Add the data to the chunks array
     chunks2.push(dataString);
@@ -187,10 +194,10 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
     // Check if the total length of chunks is greater than or equal to expected length
     if (expectedLength && chunks2.join("").length >= expectedLength) {
       // Process the complete message
-      const completeMessage = chunks2.join("").substring(0, expectedLength);
+      const completeMessage = chunks2.join("");
       // Do something with the completeMessage
 
-      // console.log("Sending:", completeMessage);
+      console.log("Sending:", completeMessage);
       websocket.send(completeMessage);
 
       // Reset variables for the next message
@@ -211,14 +218,8 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
     messageQueue = [];
   });
 
-  // Handle the closure of language server
-  languageServer.on("close", () => {
-    console.log("Closing process.");
-    websocket.close();
-  });
-
   languageServer.on("error", (...args) => {
-    console.log("Error:", ...args);
+    console.log("Error in '" + command + "':", ...args);
     websocket.close();
   });
 
@@ -380,80 +381,80 @@ const serverModes = {
 
     return connection;
   },
-  typescript: async (socket, getConnection) => {
-    const { LspServer, LspClientImpl, LspClientLogger } = await import(
-      "./tslangserver.mjs"
-    );
+  // typescript: async (socket, getConnection) => {
+  //   const { LspServer, LspClientImpl, LspClientLogger } = await import(
+  //     "./tslangserver.mjs"
+  //   );
 
-    const connection = createConnection(
-      new WebSocketMessageReader(sockWrapper(socket)),
-      new WebSocketMessageWriter(socket),
-      ProposedFeatures.all
-    );
+  //   const connection = createConnection(
+  //     new WebSocketMessageReader(sockWrapper(socket)),
+  //     new WebSocketMessageWriter(socket),
+  //     ProposedFeatures.all
+  //   );
 
-    const lspClient = new LspClientImpl(connection);
-    const logger = new LspClientLogger(lspClient);
-    const server = new LspServer({ logger, lspClient });
-    connection.onInitialize(server.initialize.bind(server));
-    connection.onInitialized(server.initialized.bind(server));
-    connection.onDidChangeConfiguration(
-      server.didChangeConfiguration.bind(server)
-    );
-    connection.onDidOpenTextDocument(server.didOpenTextDocument.bind(server));
-    connection.onDidSaveTextDocument(server.didSaveTextDocument.bind(server));
-    connection.onDidCloseTextDocument(server.didCloseTextDocument.bind(server));
-    connection.onDidChangeTextDocument(
-      server.didChangeTextDocument.bind(server)
-    );
-    connection.onCodeAction(server.codeAction.bind(server));
-    connection.onCodeLens(server.codeLens.bind(server));
-    connection.onCodeLensResolve(server.codeLensResolve.bind(server));
-    connection.onCompletion(server.completion.bind(server));
-    connection.onCompletionResolve(server.completionResolve.bind(server));
-    connection.onDefinition(server.definition.bind(server));
-    connection.onImplementation(server.implementation.bind(server));
-    connection.onTypeDefinition(server.typeDefinition.bind(server));
-    connection.onDocumentFormatting(server.documentFormatting.bind(server));
-    connection.onDocumentRangeFormatting(
-      server.documentRangeFormatting.bind(server)
-    );
-    connection.onDocumentHighlight(server.documentHighlight.bind(server));
-    connection.onDocumentSymbol(server.documentSymbol.bind(server));
-    connection.onExecuteCommand(server.executeCommand.bind(server));
-    connection.onHover(server.hover.bind(server));
-    connection.onReferences(server.references.bind(server));
-    connection.onRenameRequest(server.rename.bind(server));
-    connection.onPrepareRename(server.prepareRename.bind(server));
-    connection.onSelectionRanges(server.selectionRanges.bind(server));
-    connection.onSignatureHelp(server.signatureHelp.bind(server));
-    connection.onWorkspaceSymbol(server.workspaceSymbol.bind(server));
-    connection.onFoldingRanges(server.foldingRanges.bind(server));
-    connection.languages.onLinkedEditingRange(
-      server.linkedEditingRange.bind(server)
-    );
-    connection.languages.callHierarchy.onPrepare(
-      server.prepareCallHierarchy.bind(server)
-    );
-    connection.languages.callHierarchy.onIncomingCalls(
-      server.callHierarchyIncomingCalls.bind(server)
-    );
-    connection.languages.callHierarchy.onOutgoingCalls(
-      server.callHierarchyOutgoingCalls.bind(server)
-    );
-    connection.languages.inlayHint.on(server.inlayHints.bind(server));
-    connection.languages.semanticTokens.on(
-      server.semanticTokensFull.bind(server)
-    );
-    connection.languages.semanticTokens.onRange(
-      server.semanticTokensRange.bind(server)
-    );
-    connection.workspace.onWillRenameFiles(server.willRenameFiles.bind(server));
+  //   const lspClient = new LspClientImpl(connection);
+  //   const logger = new LspClientLogger(lspClient);
+  //   const server = new LspServer({ logger, lspClient });
+  //   connection.onInitialize(server.initialize.bind(server));
+  //   connection.onInitialized(server.initialized.bind(server));
+  //   connection.onDidChangeConfiguration(
+  //     server.didChangeConfiguration.bind(server)
+  //   );
+  //   connection.onDidOpenTextDocument(server.didOpenTextDocument.bind(server));
+  //   connection.onDidSaveTextDocument(server.didSaveTextDocument.bind(server));
+  //   connection.onDidCloseTextDocument(server.didCloseTextDocument.bind(server));
+  //   connection.onDidChangeTextDocument(
+  //     server.didChangeTextDocument.bind(server)
+  //   );
+  //   connection.onCodeAction(server.codeAction.bind(server));
+  //   connection.onCodeLens(server.codeLens.bind(server));
+  //   connection.onCodeLensResolve(server.codeLensResolve.bind(server));
+  //   connection.onCompletion(server.completion.bind(server));
+  //   connection.onCompletionResolve(server.completionResolve.bind(server));
+  //   connection.onDefinition(server.definition.bind(server));
+  //   connection.onImplementation(server.implementation.bind(server));
+  //   connection.onTypeDefinition(server.typeDefinition.bind(server));
+  //   connection.onDocumentFormatting(server.documentFormatting.bind(server));
+  //   connection.onDocumentRangeFormatting(
+  //     server.documentRangeFormatting.bind(server)
+  //   );
+  //   connection.onDocumentHighlight(server.documentHighlight.bind(server));
+  //   connection.onDocumentSymbol(server.documentSymbol.bind(server));
+  //   connection.onExecuteCommand(server.executeCommand.bind(server));
+  //   connection.onHover(server.hover.bind(server));
+  //   connection.onReferences(server.references.bind(server));
+  //   connection.onRenameRequest(server.rename.bind(server));
+  //   connection.onPrepareRename(server.prepareRename.bind(server));
+  //   connection.onSelectionRanges(server.selectionRanges.bind(server));
+  //   connection.onSignatureHelp(server.signatureHelp.bind(server));
+  //   connection.onWorkspaceSymbol(server.workspaceSymbol.bind(server));
+  //   connection.onFoldingRanges(server.foldingRanges.bind(server));
+  //   connection.languages.onLinkedEditingRange(
+  //     server.linkedEditingRange.bind(server)
+  //   );
+  //   connection.languages.callHierarchy.onPrepare(
+  //     server.prepareCallHierarchy.bind(server)
+  //   );
+  //   connection.languages.callHierarchy.onIncomingCalls(
+  //     server.callHierarchyIncomingCalls.bind(server)
+  //   );
+  //   connection.languages.callHierarchy.onOutgoingCalls(
+  //     server.callHierarchyOutgoingCalls.bind(server)
+  //   );
+  //   connection.languages.inlayHint.on(server.inlayHints.bind(server));
+  //   connection.languages.semanticTokens.on(
+  //     server.semanticTokensFull.bind(server)
+  //   );
+  //   connection.languages.semanticTokens.onRange(
+  //     server.semanticTokensRange.bind(server)
+  //   );
+  //   connection.workspace.onWillRenameFiles(server.willRenameFiles.bind(server));
 
-    socket.addEventListener("close", () => {
-      connection.dispose();
-    });
-    connection.listen();
-  },
+  //   socket.addEventListener("close", () => {
+  //     connection.dispose();
+  //   });
+  //   connection.listen();
+  // },
   python: (socket, getConnection) => {
     return proxyServer(socket, "pylsp", ["--check-parent-process"]);
   },
@@ -490,13 +491,17 @@ const serverModes = {
 // Enable WebSocket support
 expressWs(app);
 
+app.get("/version", (request, response) => {
+  response.send(VERSION);
+});
+
 // WebSocket endpoint
 app.ws("/server/:mode", async (socket, req) => {
   let mode = req.params.mode;
   let module = serverModes[mode];
   if (!module) return;
 
-  console.log("Connected to client:", mode);
+  console.log("Connecting to client:", mode);
   let currentServer = servers.get(mode),
     proxySocket;
   if (!currentServer) {
@@ -512,10 +517,7 @@ app.ws("/server/:mode", async (socket, req) => {
     );
 
     if (server) {
-      servers.set(mode, {
-        proxySocket,
-        server
-      });
+      servers.set(mode, { proxySocket, server });
     }
   } else {
     proxySocket = currentServer.proxySocket;
@@ -527,11 +529,10 @@ app.ws("/auto/:command", async (socket, request) => {
   let paramCommand = decodeURIComponent(request.params.command);
   let [command, ...args] = paramCommand.split(" ");
 
-  let currentServer = servers.get(command),
-    proxySocket;
-  console.log("Connected to auto client:", command);
+  let currentServer = servers.get(command), proxySocket;
+  console.log("Connecting to auto client:", command, request.query.args || []);
 
-  console.log(command, request.query.args);
+  // console.log(command, request.query.args);
   if (!currentServer) {
     proxySocket = new WebSocketProxy();
     let server = proxyServer(
@@ -552,6 +553,13 @@ app.ws("/auto/:command", async (socket, request) => {
 
     if (server) {
       servers.set(command, { proxySocket, server });
+
+      // Handle the closure of language server
+      server.on("close", () => {
+        console.log("Closing process for '" + command + "'");
+        servers.delete(command);
+        proxySocket.close();
+      });
     }
   } else {
     proxySocket = currentServer.proxySocket;
