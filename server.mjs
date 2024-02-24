@@ -159,7 +159,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       data = callback(data);
     }
     data = addHeaders(data, seperator || "\r\n\r\n");
-    console.log("Received:", data);
+    // console.log("Received:", data);
     if (spawned) {
       stdinStream.write(data);
     } else {
@@ -171,7 +171,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
   stdoutStream.on("data", data => {
     let dataString = data.toString();
 
-    console.log("Raw:", dataString);
+    // console.log("Raw:", dataString);
 
     // Check if the data contains 'Content-Length'
     if (dataString.includes("Content-Length")) {
@@ -184,7 +184,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
     }
     
     if (expectedLength && dataString.length >= expectedLength) {
-      console.log("Sending:", dataString);
+      // console.log("Sending:", dataString);
       return websocket.send(dataString);
     }
 
@@ -197,7 +197,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       const completeMessage = chunks2.join("");
       // Do something with the completeMessage
 
-      console.log("Sending:", completeMessage);
+      // console.log("Sending:", completeMessage);
       websocket.send(completeMessage);
 
       // Reset variables for the next message
