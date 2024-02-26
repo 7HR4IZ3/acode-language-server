@@ -20,7 +20,8 @@ import {
   WebSocketMessageWriter
 } from "vscode-ws-jsonrpc";
 
-const VERSION = "1.0.4";
+const DEBUG = false;
+const VERSION = "1.0.6";
 
 class WebSocketProxy extends EventTarget {
   onopen;
@@ -30,6 +31,7 @@ class WebSocketProxy extends EventTarget {
 
   constructor() {
     super();
+
     this.connection = null;
     this.sendQueue = new Array();
   }
@@ -138,8 +140,7 @@ function stripHeaders(data) {
 function proxyServer(websocket, command, args, { callback, seperator } = {}) {
   // Start the language server subprocess
   const languageServer = spawn(command, args || [], {
-    // stdio: ["pipe", "pipe", "pipe"],
-    shell: true
+    stdio: ["pipe", "pipe", process.stderr]
   });
   let messageQueue = [],
     spawned = false;
@@ -159,7 +160,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       data = callback(data);
     }
     data = addHeaders(data, seperator || "\r\n\r\n");
-    // console.log("Received:", data);
+    DEBUG && console.log("Received:", data);
     if (spawned) {
       stdinStream.write(data);
     } else {
@@ -167,24 +168,11 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
     }
   });
 
-  // Pipe data from the language server stdout to the WebSocket
-  stdoutStream.on("data", data => {
-    let dataString = data.toString();
+  let handleMesssge = dataString => {
+    if (!dataString) return;
 
-    // console.log("Raw:", dataString);
-
-    // Check if the data contains 'Content-Length'
-    if (dataString.includes("Content-Length")) {
-      // Extract the content length
-      const contentLengthMatch = dataString.match(/Content-Length: (\d+)/);
-      if (contentLengthMatch) {
-        expectedLength = parseInt(contentLengthMatch[1], 10);
-      }
-      dataString = dataString.split("\r\n\r\n")[1];
-    }
-    
     if (expectedLength && dataString.length >= expectedLength) {
-      // console.log("Sending:", dataString);
+      DEBUG && console.log("Sending:", dataString);
       return websocket.send(dataString);
     }
 
@@ -197,12 +185,40 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       const completeMessage = chunks2.join("");
       // Do something with the completeMessage
 
-      // console.log("Sending:", completeMessage);
+      DEBUG && console.log("Sending:", completeMessage);
       websocket.send(completeMessage);
 
       // Reset variables for the next message
       chunks2 = [];
       expectedLength = null;
+    }
+  };
+
+  // Pipe data from the language server stdout to the WebSocket
+  stdoutStream.on("data", data => {
+    let dataString = data.toString();
+
+    // console.log("Raw:", data, dataString);
+
+    // Check if the data contains 'Content-Length'
+    if (dataString.includes("Content-Length")) {
+      let messages = dataString.split("Content-Length:");
+      // console.log(messages);
+
+      for (let message of messages) {
+        if (!message?.length) continue;
+
+        // Extract the content length
+        const contentLengthMatch =
+          ("Content-Length:" + message).match(/Content-Length: (\d+)/);
+        if (contentLengthMatch) {
+          expectedLength = parseInt(contentLengthMatch[1], 10);
+        }
+        message = message.split("\r\n\r\n")[1];
+        handleMesssge(message);
+      }
+    } else {
+      handleMesssge(dataString);
     }
   });
 
@@ -210,6 +226,11 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
   websocket.addEventListener("close", () => {
     // console.log("Closed websocket.")
     languageServer.kill();
+  });
+
+  websocket.addEventListener("error", error => {
+    console.log("Error:", error);
+    // languageServer.kill();
   });
 
   languageServer.on("spawn", () => {
@@ -455,37 +476,37 @@ const serverModes = {
   //   });
   //   connection.listen();
   // },
-  python: (socket, getConnection) => {
-    return proxyServer(socket, "pylsp", ["--check-parent-process"]);
-  },
-  java: (socket, getConnection) => {
-    return proxyServer(socket, "~/jdtls/bin/jdtls", [], {
-      callback: data => {
-        return data
-          .replaceAll('"uri":"/', '"uri":"file:///')
-          .replaceAll('"url":"/', '"url":"file:///');
-      }
-    });
-  },
-  rust: (socket, getConnection) => {
-    return proxyServer(socket, "rust-analyzer", [], {
-      callback: data => {
-        return data
-          .replaceAll('"uri":"/', '"uri":"file:///')
-          .replaceAll('"url":"/', '"url":"file:///');
-      },
-      seperator: "\n\n"
-    });
-  },
-  vue: (socket, getConnection) => {
-    return proxyServer(socket, "vls", [], {
-      callback: data => {
-        return data
-          .replaceAll('"uri":"/', '"uri":"file:///')
-          .replaceAll('"url":"/', '"url":"file:///');
-      }
-    });
-  }
+  // python: (socket, getConnection) => {
+  //   return proxyServer(socket, "pylsp", ["--check-parent-process"]);
+  // },
+  // java: (socket, getConnection) => {
+  //   return proxyServer(socket, "~/jdtls/bin/jdtls", [], {
+  //     callback: data => {
+  //       return data
+  //         .replaceAll('"uri":"/', '"uri":"file:///')
+  //         .replaceAll('"url":"/', '"url":"file:///');
+  //     }
+  //   });
+  // },
+  // rust: (socket, getConnection) => {
+  //   return proxyServer(socket, "rust-analyzer", [], {
+  //     callback: data => {
+  //       return data
+  //         .replaceAll('"uri":"/', '"uri":"file:///')
+  //         .replaceAll('"url":"/', '"url":"file:///');
+  //     },
+  //     seperator: "\n\n"
+  //   });
+  // },
+  // vue: (socket, getConnection) => {
+  //   return proxyServer(socket, "vls", [], {
+  //     callback: data => {
+  //       return data
+  //         .replaceAll('"uri":"/', '"uri":"file:///')
+  //         .replaceAll('"url":"/', '"url":"file:///');
+  //     }
+  //   });
+  // }
 };
 
 // Enable WebSocket support
@@ -529,7 +550,8 @@ app.ws("/auto/:command", async (socket, request) => {
   let paramCommand = decodeURIComponent(request.params.command);
   let [command, ...args] = paramCommand.split(" ");
 
-  let currentServer = servers.get(command), proxySocket;
+  let currentServer = servers.get(command),
+    proxySocket;
   console.log("Connecting to auto client:", command, request.query.args || []);
 
   // console.log(command, request.query.args);
@@ -545,8 +567,8 @@ app.ws("/auto/:command", async (socket, request) => {
             return data;
           }
           return data
-            .replaceAll('"uri":"/', '"uri":"file:///')
-            .replaceAll('"url":"/', '"url":"file:///');
+            .replaceAll('ri":"/', 'ri":"file:///')
+            .replaceAll('rl":"/', 'rl":"file:///');
         }
       }
     );
