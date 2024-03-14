@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/data/data/com.termux/files/usr/bin/node
 
 import express from "express";
 import expressWs from "express-ws";
@@ -133,8 +133,13 @@ function addHeaders(data, sep) {
   return "Content-Length: " + String(length) + sep + data;
 }
 
-function stripHeaders(data) {
-  return data.toString().split("\r\n\r\n")[1];
+function checkJSON(data) {
+  try {
+    JSON.parse(data);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function proxyServer(websocket, command, args, { callback, seperator } = {}) {
@@ -150,7 +155,6 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
   const stdoutStream = languageServer.stdout;
 
   let chunks = [];
-  let chunks2 = [];
   let expectedLength = null;
 
   // Pipe data from the WebSocket to the language server stdin
@@ -160,7 +164,7 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
       data = callback(data);
     }
     data = addHeaders(data, seperator || "\r\n\r\n");
-    DEBUG && console.log("Received:", data);
+    // DEBUG && console.log("Received:", data);
     if (spawned) {
       stdinStream.write(data);
     } else {
@@ -168,37 +172,70 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
     }
   });
 
-  let handleMesssge = dataString => {
-    if (!dataString) return;
+  let handleMessage = (dataString, dataLength) => {
+    if (!dataString) {
+      expectedLength = dataLength;
+      return;
+    }
 
-    if (expectedLength && dataString.length >= expectedLength) {
-      DEBUG && console.log("Sending:", dataString);
+    // If currentMessage matches the local data length, send and return
+    if (
+      dataLength &&
+      (
+        dataString.length === dataLength ||
+        dataString.length === dataLength - 4
+      )
+    ) {
+      DEBUG && console.log("DSending:", dataString, checkJSON(dataString));
       return websocket.send(dataString);
     }
 
-    // Add the data to the chunks array
-    chunks2.push(dataString);
+    // If currentMessage matches the expected data length, send and return
+    if (
+      expectedLength &&
+      (
+        dataString.length === expectedLength ||
+        dataString.length === expectedLength - 4
+      )
+    ) {
+      DEBUG && console.log("ESending:", dataString, checkJSON(dataString));
+      return websocket.send(dataString);
+    }
 
-    // Check if the total length of chunks is greater than or equal to expected length
-    if (expectedLength && chunks2.join("").length >= expectedLength) {
-      // Process the complete message
-      const completeMessage = chunks2.join("");
-      // Do something with the completeMessage
+    // If no local data length use global expected length
+    if (!dataLength && expectedLength) {
+      dataLength = expectedLength;
+    }
 
-      DEBUG && console.log("Sending:", completeMessage);
-      websocket.send(completeMessage);
+    // Else check if has previous message
+    if (chunks.length >= 1) {
+      // If previous message, check if current message plus previous messsges
+      // length matches the expected length
+      const completeMessage = chunks.join("") + dataString;
+      if (
+        completeMessage.length === dataLength ||
+        completeMessage.length === dataLength - 4
+      ) {
+        // Reset chunks array and expected length
+        chunks = [];
+        // expectedLength = null;
 
-      // Reset variables for the next message
-      chunks2 = [];
-      expectedLength = null;
+        DEBUG &&
+          console.log("Sending:", completeMessage, checkJSON(completeMessage));
+        return websocket.send(completeMessage);
+      }
+    } else {
+      // Add the data to the chunks array
+      // and set global length to local length
+      chunks.push(dataString);
+      expectedLength = dataLength;
     }
   };
 
   // Pipe data from the language server stdout to the WebSocket
   stdoutStream.on("data", data => {
     let dataString = data.toString();
-
-    // console.log("Raw:", data, dataString);
+    DEBUG && console.log("Raw:", dataString);
 
     // Check if the data contains 'Content-Length'
     if (dataString.includes("Content-Length")) {
@@ -207,18 +244,21 @@ function proxyServer(websocket, command, args, { callback, seperator } = {}) {
 
       for (let message of messages) {
         if (!message?.length) continue;
+        DEBUG && console.log("\n\nHandling message:", message, expectedLength);
 
         // Extract the content length
-        const contentLengthMatch =
-          ("Content-Length:" + message).match(/Content-Length: (\d+)/);
+        const contentLengthMatch = ("Content-Length:" + message).match(
+          /Content-Length: (\d+)/
+        );
         if (contentLengthMatch) {
-          expectedLength = parseInt(contentLengthMatch[1], 10);
+          message = message.split("\r\n\r\n")[1];
+          handleMessage(message, parseInt(contentLengthMatch[1], 10));
+        } else {
+          handleMessage(message);
         }
-        message = message.split("\r\n\r\n")[1];
-        handleMesssge(message);
       }
     } else {
-      handleMesssge(dataString);
+      handleMessage(dataString);
     }
   });
 
@@ -401,7 +441,7 @@ const serverModes = {
     connection.listen();
 
     return connection;
-  },
+  }
   // typescript: async (socket, getConnection) => {
   //   const { LspServer, LspClientImpl, LspClientLogger } = await import(
   //     "./tslangserver.mjs"
@@ -567,8 +607,8 @@ app.ws("/auto/:command", async (socket, request) => {
             return data;
           }
           return data
-            .replaceAll('ri":"/', 'ri":"file:///')
-            .replaceAll('rl":"/', 'rl":"file:///');
+            .replaceAll('uri":"/', 'uri":"file:///')
+            .replaceAll('url":"/', 'url":"file:///');
         }
       }
     );

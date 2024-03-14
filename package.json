@@ -1,6 +1,6 @@
 {
   "name": "acode-lsp",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Server for Acode Language Server Plugin",
   "main": "server.mjs",
   "bin": {
